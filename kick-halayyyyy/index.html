@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kick Halay - Control Panel</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: transparent !important;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+    #game-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      background: transparent;
+    }
+    #ui-panel {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 100;
+      background: rgba(0, 0, 0, 0.75);
+      color: #fff;
+      padding: 12px 16px;
+      border-radius: 10px;
+      font-size: 13px;
+      max-width: 340px;
+      backdrop-filter: blur(6px);
+      border: 1px solid rgba(255,255,255,0.15);
+      transition: opacity 0.3s;
+    }
+    #ui-panel.hidden { opacity: 0; pointer-events: none; }
+    #ui-panel h3 { margin-bottom: 8px; font-size: 15px; color: #ff6b6b; }
+    #ui-panel label { display: block; margin-top: 8px; margin-bottom: 4px; opacity: 0.85; }
+    #ui-panel input[type="text"] {
+      width: 100%;
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid #444;
+      background: #1a1a1a;
+      color: #fff;
+      font-size: 13px;
+    }
+    #ui-panel button {
+      margin-top: 10px;
+      margin-right: 6px;
+      padding: 7px 14px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 13px;
+    }
+    #btn-connect { background: #00e701; color: #000; }
+    #btn-demo { background: #4ecdc4; color: #000; }
+    #btn-hide { background: #666; color: #fff; }
+    #btn-clear { background: #c44536; color: #fff; }
+    #status {
+      margin-top: 10px;
+      font-size: 12px;
+      opacity: 0.9;
+    }
+    #status.ok { color: #00e701; }
+    #status.err { color: #ff6b6b; }
+    #status.warn { color: #ffd166; }
+    #player-count {
+      position: fixed;
+      bottom: 12px;
+      right: 12px;
+      background: rgba(0,0,0,0.6);
+      color: #fff;
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 13px;
+      z-index: 50;
+      pointer-events: none;
+    }
+    .hint {
+      font-size: 11px;
+      opacity: 0.7;
+      margin-top: 6px;
+      line-height: 1.4;
+    }
+    .hint code {
+      background: rgba(255,255,255,0.12);
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game-canvas"></canvas>
+
+  <div id="ui-panel">
+    <h3>🕺 Kick Halay</h3>
+    <label>Kick kanalı (slug)</label>
+    <input type="text" id="channel-input" placeholder="ornek: lord3131" value="" />
+    <div>
+      <button id="btn-connect">Bağlan</button>
+      <button id="btn-demo">Demo Modu</button>
+      <button id="btn-hide">Paneli Gizle</button>
+    </div>
+
+    <!-- OBS Overlay URL -->
+    <div id="obs-url-box" style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.12)">
+      <label style="margin-top:0;color:#4ecdc4;font-weight:600">OBS Overlay Adresi</label>
+      <div style="display:flex;gap:6px;margin-top:6px;align-items:stretch">
+        <input type="text" id="obs-url-output" readonly
+          placeholder="Kanal adı girince URL oluşur"
+          style="flex:1;margin:0;font-size:11px;cursor:text;background:#111;border-color:#333" />
+        <button id="btn-copy-url" type="button"
+          style="background:#4ecdc4;color:#000;margin-top:0;padding:7px 12px;white-space:nowrap;min-width:72px">
+          Kopyala
+        </button>
+      </div>
+      <div id="copy-feedback" style="font-size:11px;margin-top:4px;min-height:16px;opacity:0.85"></div>
+    </div>
+
+    <label style="margin-top:12px">Manuel oyuncu ekle</label>
+    <div style="display:flex;gap:6px;margin-top:4px;align-items:center">
+      <input type="text" id="manual-name" placeholder="kullanıcı adı" style="flex:1;margin:0" />
+      <button id="btn-add" style="background:#ff6b6b;color:#fff;margin-top:0;padding:7px 12px">Ekle</button>
+    </div>
+    <div style="margin-top:8px">
+      <button id="btn-clear">Bu kanalı temizle</button>
+    </div>
+    <div id="status">Hazır. Kanal girip Bağlan veya Demo kullan.</div>
+    <div class="hint">
+      OBS'de Browser Source → yukarıdaki <b>tam URL</b>'yi yapıştır (1920×1080).<br>
+      Her kanalın oyuncuları tamamen ayrıdır.<br>
+      Komutlar: <b>!katıl</b> / <b>!ayrıl</b> &nbsp;|&nbsp; <b>H</b> = panel
+    </div>
+  </div>
+
+  <div id="player-count">Oyuncu: 0</div>
+
+  <script>
+    // ============================================================
+    // KICK HALAY - Control (per-channel shared state)
+    // ============================================================
+
+    const canvas = document.getElementById('game-canvas');
+    const ctx = canvas.getContext('2d');
+    const statusEl = document.getElementById('status');
+    const playerCountEl = document.getElementById('player-count');
+    const uiPanel = document.getElementById('ui-panel');
+
+    let players = new Map();
+    let animationTime = 0;
+    let lastFrame = performance.now();
+    let kickWs = null;
+    let chatroomId = null;
+    let channelSlug = '';          // active Kick + shared room
+    let isDemo = false;
+    let demoInterval = null;
+
+    const BASE_CHAR_W = 48;
+    const BASE_CHAR_H = 72;
+    const MIN_CHAR_SCALE = 0.35;
+    const MAX_CHAR_SCALE = 1.15;
+    const PADDING = 28;
+
+    const PALETTE = [
+      { body: '#e63946', pants: '#1d3557', accent: '#f1faee' },
+      { body: '#2a9d8f', pants: '#264653', accent: '#e9c46a' },
+      { body: '#e76f51', pants: '#264653', accent: '#f4a261' },
+      { body: '#457b9d', pants: '#1d3557', accent: '#a8dadc' },
+      { body: '#9b5de5', pants: '#3a0ca3', accent: '#f15bb5' },
+      { body: '#00bbf9', pants: '#005f73', accent: '#90e0ef' },
+      { body: '#f15bb5', pants: '#9b5de5', accent: '#fee440' },
+      { body: '#00f5d4', pants: '#0077b6', accent: '#80ed99' },
+    ];
+
+    class Player {
+      constructor(data) {
+        if (typeof data === 'string') {
+          this.username = data;
+          this.color = PALETTE[Math.floor(Math.random() * PALETTE.length)];
+          this.joinTime = Date.now();
+          this.angleOffset = Math.random() * Math.PI * 2;
+        } else {
+          this.username = data.username;
+          this.color = data.color || PALETTE[Math.floor(Math.random() * PALETTE.length)];
+          this.joinTime = data.joinTime || Date.now();
+          this.angleOffset = typeof data.angleOffset === 'number' ? data.angleOffset : Math.random() * Math.PI * 2;
+        }
+        this.targetX = 0;
+        this.targetY = 0;
+        this.x = 0;
+        this.y = 0;
+        this.scale = 1;
+        this.facing = 1;
+      }
+      toJSON() {
+        return {
+          username: this.username,
+          color: this.color,
+          joinTime: this.joinTime,
+          angleOffset: this.angleOffset
+        };
+      }
+    }
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      layoutCircle();
+    }
+
+    function layoutCircle() {
+      const n = players.size;
+      if (n === 0) return;
+      const w = canvas.width, h = canvas.height;
+      const cx = w / 2, cy = h / 2;
+      const availW = Math.max(100, w - PADDING * 2);
+      const availH = Math.max(100, h - PADDING * 2);
+      const maxDiameter = Math.min(availW, availH);
+
+      let charScale = MAX_CHAR_SCALE;
+      if (n > 12) charScale = Math.max(MIN_CHAR_SCALE, MAX_CHAR_SCALE - (n - 12) * 0.025);
+      if (n > 40) charScale = MIN_CHAR_SCALE;
+
+      const charW = BASE_CHAR_W * charScale;
+      const charH = BASE_CHAR_H * charScale;
+      const minRadiusForFit = (maxDiameter / 2) - (charH * 0.55);
+      const minRadiusForSpacing = (n * charW * 1.15) / (2 * Math.PI);
+      let radius = Math.min(minRadiusForFit, Math.max(minRadiusForSpacing, 80));
+      radius = Math.min(radius, minRadiusForFit);
+      radius = Math.max(radius, 40);
+
+      let i = 0;
+      for (const p of players.values()) {
+        const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+        p.targetX = cx + Math.cos(angle) * radius;
+        p.targetY = cy + Math.sin(angle) * radius;
+        p.scale = charScale;
+        p.facing = Math.cos(angle) > 0 ? 1 : -1;
+        if (p.x === 0 && p.y === 0) {
+          p.x = p.targetX;
+          p.y = p.targetY;
+        }
+        i++;
+      }
+    }
+
+    function update(dt) {
+      animationTime += dt;
+      for (const p of players.values()) {
+        p.x += (p.targetX - p.x) * Math.min(1, dt * 4);
+        p.y += (p.targetY - p.y) * Math.min(1, dt * 4);
+      }
+    }
+
+    function drawCharacter(p, t) {
+      const s = p.scale, x = p.x, y = p.y;
+      const beat = t * 2.8;
+      const step = Math.sin(beat + p.angleOffset) * 6 * s;
+      const bounce = Math.abs(Math.sin(beat * 1.5 + p.angleOffset * 0.7)) * 8 * s;
+      const armSwing = Math.sin(beat * 1.2) * 0.6;
+
+      ctx.save();
+      ctx.translate(x + step, y - bounce);
+      ctx.scale(p.facing, 1);
+
+      ctx.beginPath();
+      ctx.ellipse(0, 28 * s, 16 * s, 5 * s, 0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.fill();
+
+      const legSpread = Math.sin(beat) * 8 * s;
+      ctx.strokeStyle = p.color.pants;
+      ctx.lineWidth = 5 * s;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(-4 * s, 8 * s);
+      ctx.lineTo(-8 * s - legSpread, 26 * s);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(4 * s, 8 * s);
+      ctx.lineTo(8 * s + legSpread, 26 * s);
+      ctx.stroke();
+
+      ctx.fillStyle = p.color.body;
+      ctx.beginPath();
+      ctx.roundRect(-10 * s, -18 * s, 20 * s, 28 * s, 6 * s);
+      ctx.fill();
+
+      ctx.strokeStyle = p.color.body;
+      ctx.lineWidth = 4.5 * s;
+      ctx.beginPath();
+      ctx.moveTo(-10 * s, -8 * s);
+      ctx.quadraticCurveTo(-22 * s, -4 * s + armSwing * 10 * s, -18 * s, 10 * s);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(10 * s, -8 * s);
+      ctx.quadraticCurveTo(22 * s, -4 * s - armSwing * 10 * s, 18 * s, 10 * s);
+      ctx.stroke();
+
+      ctx.fillStyle = '#fceadd';
+      ctx.beginPath();
+      ctx.arc(0, -28 * s, 11 * s, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#333';
+      ctx.beginPath();
+      ctx.arc(-4 * s, -30 * s, 1.8 * s, 0, Math.PI * 2);
+      ctx.arc(4 * s, -30 * s, 1.8 * s, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(0, -26 * s, 4 * s, 0.15, Math.PI - 0.15);
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 1.5 * s;
+      ctx.stroke();
+
+      ctx.fillStyle = p.color.accent;
+      ctx.fillRect(-10 * s, -2 * s, 20 * s, 4 * s);
+
+      ctx.scale(p.facing, 1);
+      ctx.font = `bold ${Math.max(11, 13 * s)}px system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+      ctx.strokeText(p.username, 0, -42 * s);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(p.username, 0, -42 * s);
+
+      ctx.restore();
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (players.size > 0) {
+        const first = players.values().next().value;
+        const cx = canvas.width / 2, cy = canvas.height / 2;
+        const r = Math.hypot(first.targetX - cx, first.targetY - cy);
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+      for (const p of players.values()) drawCharacter(p, animationTime);
+      playerCountEl.textContent = `Oyuncu: ${players.size}` + (channelSlug ? ` (${channelSlug})` : '');
+    }
+
+    function loop(now) {
+      const dt = Math.min(0.05, (now - lastFrame) / 1000);
+      lastFrame = now;
+      update(dt);
+      render();
+      requestAnimationFrame(loop);
+    }
+
+    // ---------- Shared WebSocket (per-channel rooms) ----------
+    let sharedWs = null;
+    let sharedReconnectTimer = null;
+    let sharedReconnectAttempts = 0;
+    let sharedConnected = false;
+
+    function syncFromServer(list) {
+      if (!Array.isArray(list)) return;
+      const next = new Map();
+      for (const data of list) {
+        if (!data || !data.username) continue;
+        const key = data.username.toLowerCase();
+        const existing = players.get(key);
+        if (existing) {
+          existing.color = data.color || existing.color;
+          existing.joinTime = data.joinTime || existing.joinTime;
+          existing.angleOffset = typeof data.angleOffset === 'number' ? data.angleOffset : existing.angleOffset;
+          next.set(key, existing);
+        } else {
+          next.set(key, new Player(data));
+        }
+      }
+      players = next;
+      layoutCircle();
+    }
+
+    function sendToServer(obj) {
+      if (!channelSlug) return false;
+      if (sharedWs && sharedWs.readyState === WebSocket.OPEN) {
+        // Always attach current channel
+        obj.channel = channelSlug;
+        sharedWs.send(JSON.stringify(obj));
+        return true;
+      }
+      return false;
+    }
+
+    function subscribeToChannel(slug) {
+      if (!sharedWs || sharedWs.readyState !== WebSocket.OPEN) return;
+      if (!slug) return;
+      sharedWs.send(JSON.stringify({ type: 'subscribe', channel: slug }));
+    }
+
+    function connectShared() {
+      if (sharedWs && (sharedWs.readyState === WebSocket.OPEN || sharedWs.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+      const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+      try {
+        sharedWs = new WebSocket(proto + location.host);
+      } catch (e) {
+        sharedConnected = false;
+        scheduleSharedReconnect();
+        return;
+      }
+
+      sharedWs.onopen = () => {
+        sharedReconnectAttempts = 0;
+        sharedConnected = true;
+        if (channelSlug) {
+          subscribeToChannel(channelSlug);
+        }
+        if (!kickWs && !isDemo) {
+          setStatus('Shared sunucu bağlı. Kanal girip Bağlan veya Demo kullan.', 'ok');
+        }
+      };
+
+      sharedWs.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'players') {
+            // Only accept our channel
+            if (!msg.channel || msg.channel === channelSlug) {
+              syncFromServer(msg.players);
+            }
+          }
+        } catch (_) {}
+      };
+
+      sharedWs.onclose = () => {
+        sharedWs = null;
+        sharedConnected = false;
+        scheduleSharedReconnect();
+      };
+
+      sharedWs.onerror = () => {};
+    }
+
+    function scheduleSharedReconnect() {
+      sharedReconnectAttempts++;
+      const wait = Math.min(2000 + sharedReconnectAttempts * 800, 12000);
+      clearTimeout(sharedReconnectTimer);
+      sharedReconnectTimer = setTimeout(connectShared, wait);
+    }
+
+    // ---------- Player management ----------
+    function ensureChannel() {
+      if (channelSlug) return true;
+      // Try to take from input
+      const raw = (document.getElementById('channel-input').value || '').trim();
+      if (raw) {
+        channelSlug = raw.toLowerCase().replace(/^https?:\/\/(www\.)?kick\.com\//, '').split(/[/?#]/)[0];
+        if (channelSlug) {
+          subscribeToChannel(channelSlug);
+          return true;
+        }
+      }
+      setStatus('Önce bir kanal adı gir (ör: lord3131).', 'err');
+      return false;
+    }
+
+    function addPlayer(username) {
+      if (!username) return;
+      if (!ensureChannel()) return;
+      const key = username.toLowerCase();
+      if (players.has(key)) return;
+      if (players.size >= 80) return;
+
+      const p = new Player(username);
+      players.set(key, p);
+      layoutCircle();
+
+      if (!sendToServer({ type: 'add', player: p.toJSON() })) {
+        setStatus('Shared sunucu bağlı değil – sadece bu sekmede görünür.', 'warn');
+      }
+    }
+
+    function removePlayer(username) {
+      if (!channelSlug) return;
+      const key = username.toLowerCase();
+      if (!players.has(key)) return;
+      players.delete(key);
+      layoutCircle();
+      sendToServer({ type: 'remove', username: username });
+    }
+
+    function clearAllPlayers() {
+      if (!ensureChannel()) return;
+      players.clear();
+      layoutCircle();
+      sendToServer({ type: 'clear' });
+      setStatus('Kanal temizlendi: ' + channelSlug, 'ok');
+    }
+
+    // ---------- Kick Chat (unchanged core logic) ----------
+    let reconnectTimer = null;
+    let reconnectAttempts = 0;
+    let intentionalClose = false;
+    let pusherAppKey = null;
+    let pusherCluster = 'us2';
+    let seenMessageIds = new Set();
+    const MAX_SEEN_IDS = 400;
+
+    function uuid() {
+      if (crypto && crypto.randomUUID) return crypto.randomUUID();
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+      });
+    }
+
+    async function resolveChatroomId(slug) {
+      const endpoints = [
+        `https://kick.com/api/v2/channels/${encodeURIComponent(slug)}`,
+        `https://kick.com/api/v1/channels/${encodeURIComponent(slug)}`
+      ];
+      for (const url of endpoints) {
+        try {
+          const res = await fetch(url, {
+            headers: { 'Accept': 'application/json' },
+            mode: 'cors',
+            credentials: 'omit'
+          });
+          if (!res.ok) continue;
+          const data = await res.json();
+          const id = data?.chatroom?.id ?? data?.chatroom_id ?? data?.id;
+          if (id) return Number(id);
+        } catch (e) {
+          console.warn('Channel fetch:', e.message);
+        }
+      }
+      return null;
+    }
+
+    async function resolvePusherCredentials() {
+      try {
+        const res = await fetch('https://web.kick.com/api/v1/realtime/connection', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          mode: 'cors',
+          credentials: 'omit',
+          body: JSON.stringify({
+            client: { id: uuid(), type: 'web' },
+            capabilities: { accepted_providers: [{ provider: 'pusher' }] }
+          })
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const json = await res.json();
+        const conn = json?.data?.connections?.[0];
+        if (conn?.provider === 'pusher' && conn.credentials?.app_key) {
+          return {
+            appKey: conn.credentials.app_key,
+            cluster: conn.credentials.cluster || 'us2'
+          };
+        }
+        throw new Error('Pusher bilgisi gelmedi');
+      } catch (e) {
+        console.warn('Realtime credential hatası:', e.message);
+        return { appKey: '34bf7a0ff419a2a775b9', cluster: 'us2' };
+      }
+    }
+
+    async function connectKick(slug) {
+      intentionalClose = false;
+      disconnectKick(false);
+      stopDemo();
+
+      channelSlug = (slug || '').trim().toLowerCase()
+        .replace(/^https?:\/\/(www\.)?kick\.com\//, '')
+        .split(/[/?#]/)[0];
+      if (!channelSlug) {
+        setStatus('Kanal adı gerekli (örnek: lord3131).', 'err');
+        return;
+      }
+
+      // Subscribe shared room to this channel
+      if (sharedConnected) {
+        subscribeToChannel(channelSlug);
+      }
+
+      setStatus('Kanal ve sohbet bilgisi alınıyor...', 'warn');
+      reconnectAttempts = 0;
+      seenMessageIds.clear();
+
+      try {
+        const [id, creds] = await Promise.all([
+          resolveChatroomId(channelSlug),
+          resolvePusherCredentials()
+        ]);
+
+        if (!id) {
+          setStatus('Kanal bulunamadı: "' + channelSlug + '". Adı kontrol et veya Demo kullan.', 'err');
+          return;
+        }
+
+        chatroomId = id;
+        pusherAppKey = creds.appKey;
+        pusherCluster = creds.cluster || 'us2';
+        openWebSocket();
+      } catch (err) {
+        setStatus('Bağlantı hazırlığı başarısız: ' + (err.message || 'bilinmiyor') + ' — Demo kullan.', 'err');
+      }
+    }
+
+    function openWebSocket() {
+      if (intentionalClose) return;
+      if (!pusherAppKey || !chatroomId) {
+        setStatus('Eksik bilgi (key/chatroom). Tekrar Bağlan.', 'err');
+        return;
+      }
+
+      const wsUrl = `wss://ws-${pusherCluster}.pusher.com/app/${pusherAppKey}?protocol=7&client=js&version=8.4.0-rc2&flash=false`;
+      setStatus(`Kick sohbetine bağlanıyor... (${channelSlug}, deneme ${reconnectAttempts + 1})`, 'warn');
+
+      try {
+        kickWs = new WebSocket(wsUrl);
+      } catch (e) {
+        setStatus('WebSocket açılamadı: ' + e.message, 'err');
+        scheduleReconnect();
+        return;
+      }
+
+      let subscribed = false;
+      let connectTimeout = setTimeout(() => {
+        if (!subscribed && kickWs) {
+          setStatus('Bağlantı zaman aşımı. Yeniden deneniyor...', 'warn');
+          try { kickWs.close(); } catch (_) {}
+        }
+      }, 12000);
+
+      kickWs.onopen = () => {};
+
+      kickWs.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+
+          if (msg.event === 'pusher:connection_established') {
+            clearTimeout(connectTimeout);
+            kickWs.send(JSON.stringify({
+              event: 'pusher:subscribe',
+              data: { auth: '', channel: `chatrooms.${chatroomId}.v2` }
+            }));
+            kickWs.send(JSON.stringify({
+              event: 'pusher:subscribe',
+              data: { auth: '', channel: `chatrooms.${chatroomId}` }
+            }));
+            subscribed = true;
+            reconnectAttempts = 0;
+            setStatus('✅ Kick bağlandı: ' + channelSlug + ' | OBS: /overlay/' + channelSlug, 'ok');
+            return;
+          }
+
+          if (msg.event === 'pusher:subscription_succeeded') return;
+
+          if (msg.event === 'pusher:ping') {
+            kickWs.send(JSON.stringify({ event: 'pusher:pong', data: {} }));
+            return;
+          }
+
+          if (msg.event === 'pusher:error') {
+            let errData = msg.data;
+            if (typeof errData === 'string') {
+              try { errData = JSON.parse(errData); } catch (_) {}
+            }
+            const code = errData?.code;
+            const message = errData?.message || 'bilinmeyen';
+            if (code === 4001) {
+              setStatus('Pusher anahtarı geçersiz, yenileniyor...', 'warn');
+              resolvePusherCredentials().then(c => {
+                pusherAppKey = c.appKey;
+                pusherCluster = c.cluster;
+                scheduleReconnect(500);
+              });
+            } else {
+              setStatus('Pusher hatası (' + code + '): ' + message, 'warn');
+            }
+            return;
+          }
+
+          const eventName = String(msg.event || '').replace(/\\\\/g, '\\');
+          const isChat =
+            eventName.includes('ChatMessage') ||
+            eventName === 'App\\Events\\ChatMessageEvent' ||
+            eventName === 'App\\Events\\ChatMessageSentEvent' ||
+            eventName.endsWith('ChatMessageEvent');
+
+          if (!isChat) return;
+
+          let data = msg.data;
+          if (typeof data === 'string') {
+            try { data = JSON.parse(data); } catch (_) { return; }
+          }
+          if (!data || typeof data !== 'object') return;
+
+          const msgId = data.id || data.message_id || null;
+          if (msgId) {
+            if (seenMessageIds.has(msgId)) return;
+            seenMessageIds.add(msgId);
+            if (seenMessageIds.size > MAX_SEEN_IDS) {
+              const first = seenMessageIds.values().next().value;
+              seenMessageIds.delete(first);
+            }
+          }
+
+          const content = String(data.content || data.message || '').trim();
+          const user =
+            data.sender?.username ||
+            data.username ||
+            data.user?.username ||
+            data.sender?.slug ||
+            'anon';
+          if (content && user) handleChatCommand(user, content);
+        } catch (e) {}
+      };
+
+      kickWs.onerror = () => {};
+      kickWs.onclose = (ev) => {
+        clearTimeout(connectTimeout);
+        kickWs = null;
+        if (intentionalClose) return;
+        scheduleReconnect();
+      };
+    }
+
+    function scheduleReconnect(delayMs) {
+      if (intentionalClose) return;
+      reconnectAttempts++;
+      if (reconnectAttempts > 10) {
+        setStatus('Bağlantı sürekli kopuyor. Demo Modu kullan.', 'err');
+        return;
+      }
+      const wait = delayMs != null ? delayMs : Math.min(3000 + reconnectAttempts * 1000, 15000);
+      setStatus(`Bağlantı koptu, ${(wait / 1000).toFixed(0)} sn sonra yeniden... (${reconnectAttempts}/10)`, 'warn');
+      clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(() => {
+        if (reconnectAttempts % 3 === 0) {
+          resolvePusherCredentials().then(c => {
+            pusherAppKey = c.appKey;
+            pusherCluster = c.cluster;
+            openWebSocket();
+          }).catch(() => openWebSocket());
+        } else {
+          openWebSocket();
+        }
+      }, wait);
+    }
+
+    function disconnectKick(markIntentional = true) {
+      if (markIntentional) intentionalClose = true;
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      if (kickWs) {
+        try { kickWs.close(); } catch (_) {}
+        kickWs = null;
+      }
+    }
+
+    function handleChatCommand(username, content) {
+      const lower = content.toLowerCase().trim();
+      if (
+        lower === '!katıl' || lower === '!katil' || lower === '!join' ||
+        lower === '!halay' || lower === '!dans'
+      ) {
+        addPlayer(username);
+      } else if (
+        lower === '!ayrıl' || lower === '!ayril' || lower === '!leave' ||
+        lower === '!çık' || lower === '!cik' || lower === '!çıkış' || lower === '!cikis'
+      ) {
+        removePlayer(username);
+      }
+    }
+
+    // ---------- Demo ----------
+    function startDemo() {
+      stopDemo();
+      isDemo = true;
+      disconnectKick(true);
+
+      // Demo needs a channel room too
+      if (!channelSlug) {
+        const raw = (document.getElementById('channel-input').value || '').trim();
+        channelSlug = raw
+          ? raw.toLowerCase().replace(/^https?:\/\/(www\.)?kick\.com\//, '').split(/[/?#]/)[0]
+          : 'demo';
+        document.getElementById('channel-input').value = channelSlug;
+      }
+      if (sharedConnected) subscribeToChannel(channelSlug);
+
+      setStatus('Demo aktif (kanal: ' + channelSlug + '). OBS: /overlay/' + channelSlug, 'ok');
+
+      const names = [
+        'Ayşe', 'Mehmet', 'Zeynep', 'Ali', 'Elif', 'Can', 'Selin', 'Emre',
+        'Deniz', 'Burak', 'Ceren', 'Kaan', 'İrem', 'Yusuf', 'Sude', 'Mert',
+        'Ece', 'Onur', 'Nazlı', 'Berk', 'Gizem', 'Tolga', 'Pınar', 'Oğuz'
+      ];
+      let idx = 0;
+      for (let i = 0; i < 6; i++) {
+        addPlayer(names[idx++ % names.length] + (idx > names.length ? idx : ''));
+      }
+
+      demoInterval = setInterval(() => {
+        if (players.size < 28 && Math.random() > 0.4) {
+          addPlayer(names[idx % names.length] + (Math.floor(idx / names.length) || ''));
+          idx++;
+        } else if (players.size > 8 && Math.random() > 0.7) {
+          const keys = Array.from(players.keys());
+          removePlayer(keys[Math.floor(Math.random() * keys.length)]);
+        }
+      }, 2200);
+    }
+
+    function stopDemo() {
+      isDemo = false;
+      if (demoInterval) {
+        clearInterval(demoInterval);
+        demoInterval = null;
+      }
+    }
+
+    function setStatus(text, type = '') {
+      statusEl.textContent = text;
+      statusEl.className = type;
+    }
+
+    // ---------- OBS Overlay URL (live + copy) ----------
+    const channelInputEl = document.getElementById('channel-input');
+    const obsUrlOutputEl = document.getElementById('obs-url-output');
+    const btnCopyUrl = document.getElementById('btn-copy-url');
+    const copyFeedbackEl = document.getElementById('copy-feedback');
+
+    function normalizeSlugForUrl(raw) {
+      return (raw || '')
+        .trim()
+        .toLowerCase()
+        .replace(/^https?:\/\/(www\.)?kick\.com\//, '')
+        .split(/[/?#]/)[0]
+        .replace(/[^a-z0-9_-]/g, '');
+    }
+
+    function buildObsUrl(slug) {
+      if (!slug) return '';
+      // Tam URL: mevcut origin + /overlay/kanal
+      return location.origin + '/overlay/' + slug;
+    }
+
+    function updateObsUrlDisplay() {
+      const slug = normalizeSlugForUrl(channelInputEl.value);
+      const url = buildObsUrl(slug);
+      obsUrlOutputEl.value = url || '';
+      obsUrlOutputEl.placeholder = slug
+        ? ''
+        : 'Kanal adı girince URL oluşur';
+      btnCopyUrl.disabled = !url;
+      btnCopyUrl.style.opacity = url ? '1' : '0.5';
+      if (!url) copyFeedbackEl.textContent = '';
+    }
+
+    channelInputEl.addEventListener('input', updateObsUrlDisplay);
+    channelInputEl.addEventListener('change', updateObsUrlDisplay);
+
+    btnCopyUrl.addEventListener('click', async () => {
+      const url = obsUrlOutputEl.value.trim();
+      if (!url) return;
+      try {
+        await navigator.clipboard.writeText(url);
+        copyFeedbackEl.textContent = '✓ Panoya kopyalandı';
+        copyFeedbackEl.style.color = '#00e701';
+        btnCopyUrl.textContent = 'Kopyalandı';
+        setTimeout(() => {
+          btnCopyUrl.textContent = 'Kopyala';
+          copyFeedbackEl.textContent = '';
+        }, 2000);
+      } catch (e) {
+        // Fallback: select + execCommand
+        obsUrlOutputEl.select();
+        obsUrlOutputEl.setSelectionRange(0, 99999);
+        try {
+          document.execCommand('copy');
+          copyFeedbackEl.textContent = '✓ Panoya kopyalandı';
+          copyFeedbackEl.style.color = '#00e701';
+        } catch (_) {
+          copyFeedbackEl.textContent = 'Kopyalanamadı – elle seçip kopyala';
+          copyFeedbackEl.style.color = '#ffd166';
+        }
+        setTimeout(() => { copyFeedbackEl.textContent = ''; }, 2500);
+      }
+    });
+
+    // Click on URL field also selects for convenience
+    obsUrlOutputEl.addEventListener('click', () => {
+      if (obsUrlOutputEl.value) obsUrlOutputEl.select();
+    });
+
+    document.getElementById('btn-connect').addEventListener('click', () => {
+      stopDemo();
+      const slug = channelInputEl.value.trim();
+      connectKick(slug);
+      updateObsUrlDisplay();
+    });
+
+    document.getElementById('btn-demo').addEventListener('click', () => {
+      startDemo();
+      updateObsUrlDisplay();
+    });
+
+    document.getElementById('btn-hide').addEventListener('click', () => {
+      uiPanel.classList.add('hidden');
+    });
+
+    document.getElementById('btn-clear').addEventListener('click', () => {
+      clearAllPlayers();
+    });
+
+    function manualAdd() {
+      const input = document.getElementById('manual-name');
+      const name = (input.value || '').trim();
+      if (!name) return;
+      addPlayer(name);
+      input.value = '';
+      setStatus(`Eklendi: ${name} (toplam ${players.size})`, 'ok');
+    }
+    document.getElementById('btn-add').addEventListener('click', manualAdd);
+    document.getElementById('manual-name').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') manualAdd();
+    });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'h' || e.key === 'H') {
+        uiPanel.classList.toggle('hidden');
+      }
+    });
+
+    window.addEventListener('resize', resize);
+    resize();
+    requestAnimationFrame(loop);
+    connectShared();
+    updateObsUrlDisplay();
+  </script>
+</body>
+</html>

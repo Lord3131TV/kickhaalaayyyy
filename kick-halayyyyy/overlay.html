@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kick Halay - OBS Overlay</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: transparent !important;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+    #game-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      background: transparent;
+    }
+    #hint {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: rgba(255,255,255,0.35);
+      font-size: 14px;
+      text-align: center;
+      pointer-events: none;
+      display: none;
+      max-width: 80%;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game-canvas"></canvas>
+  <div id="hint"></div>
+
+  <script>
+    // ============================================================
+    // KICK HALAY - OBS Overlay (per-channel, transparent)
+    // URL: /overlay/KANAL_ADI  →  sadece o kanalın oyuncuları
+    // ============================================================
+
+    const canvas = document.getElementById('game-canvas');
+    const ctx = canvas.getContext('2d');
+    const hintEl = document.getElementById('hint');
+
+    function getChannelFromPath() {
+      const parts = location.pathname.split('/').filter(Boolean);
+      if (parts[0] === 'overlay' && parts[1]) {
+        return parts[1].toLowerCase().replace(/[^a-z0-9_-]/g, '');
+      }
+      return '';
+    }
+
+    const CHANNEL = getChannelFromPath();
+
+    if (!CHANNEL) {
+      hintEl.style.display = 'block';
+      hintEl.textContent = 'Kanal belirtilmedi. Örnek: /overlay/lord3131';
+    }
+
+    let players = new Map();
+    let animationTime = 0;
+    let lastFrame = performance.now();
+
+    const BASE_CHAR_W = 48;
+    const BASE_CHAR_H = 72;
+    const MIN_CHAR_SCALE = 0.35;
+    const MAX_CHAR_SCALE = 1.15;
+    const PADDING = 28;
+
+    const PALETTE = [
+      { body: '#e63946', pants: '#1d3557', accent: '#f1faee' },
+      { body: '#2a9d8f', pants: '#264653', accent: '#e9c46a' },
+      { body: '#e76f51', pants: '#264653', accent: '#f4a261' },
+      { body: '#457b9d', pants: '#1d3557', accent: '#a8dadc' },
+      { body: '#9b5de5', pants: '#3a0ca3', accent: '#f15bb5' },
+      { body: '#00bbf9', pants: '#005f73', accent: '#90e0ef' },
+      { body: '#f15bb5', pants: '#9b5de5', accent: '#fee440' },
+      { body: '#00f5d4', pants: '#0077b6', accent: '#80ed99' },
+    ];
+
+    class Player {
+      constructor(data) {
+        this.username = data.username;
+        this.color = data.color || PALETTE[Math.floor(Math.random() * PALETTE.length)];
+        this.joinTime = data.joinTime || Date.now();
+        this.angleOffset = typeof data.angleOffset === 'number' ? data.angleOffset : Math.random() * Math.PI * 2;
+        this.targetX = 0;
+        this.targetY = 0;
+        this.x = 0;
+        this.y = 0;
+        this.scale = 1;
+        this.facing = 1;
+      }
+    }
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      layoutCircle();
+    }
+
+    function layoutCircle() {
+      const n = players.size;
+      if (n === 0) return;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      const cx = w / 2;
+      const cy = h / 2;
+
+      const availW = Math.max(100, w - PADDING * 2);
+      const availH = Math.max(100, h - PADDING * 2);
+      const maxDiameter = Math.min(availW, availH);
+
+      let charScale = MAX_CHAR_SCALE;
+      if (n > 12) charScale = Math.max(MIN_CHAR_SCALE, MAX_CHAR_SCALE - (n - 12) * 0.025);
+      if (n > 40) charScale = MIN_CHAR_SCALE;
+
+      const charW = BASE_CHAR_W * charScale;
+      const charH = BASE_CHAR_H * charScale;
+
+      const minRadiusForFit = (maxDiameter / 2) - (charH * 0.55);
+      const minRadiusForSpacing = (n * charW * 1.15) / (2 * Math.PI);
+
+      let radius = Math.min(minRadiusForFit, Math.max(minRadiusForSpacing, 80));
+      radius = Math.min(radius, minRadiusForFit);
+      radius = Math.max(radius, 40);
+
+      let i = 0;
+      for (const p of players.values()) {
+        const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+        p.targetX = cx + Math.cos(angle) * radius;
+        p.targetY = cy + Math.sin(angle) * radius;
+        p.scale = charScale;
+        p.facing = Math.cos(angle) > 0 ? 1 : -1;
+        if (p.x === 0 && p.y === 0) {
+          p.x = p.targetX;
+          p.y = p.targetY;
+        }
+        i++;
+      }
+    }
+
+    function update(dt) {
+      animationTime += dt;
+      for (const p of players.values()) {
+        p.x += (p.targetX - p.x) * Math.min(1, dt * 4);
+        p.y += (p.targetY - p.y) * Math.min(1, dt * 4);
+      }
+    }
+
+    function drawCharacter(p, t) {
+      const s = p.scale;
+      const x = p.x;
+      const y = p.y;
+
+      const beat = t * 2.8;
+      const step = Math.sin(beat + p.angleOffset) * 6 * s;
+      const bounce = Math.abs(Math.sin(beat * 1.5 + p.angleOffset * 0.7)) * 8 * s;
+      const armSwing = Math.sin(beat * 1.2) * 0.6;
+
+      ctx.save();
+      ctx.translate(x + step, y - bounce);
+      ctx.scale(p.facing, 1);
+
+      ctx.beginPath();
+      ctx.ellipse(0, 28 * s, 16 * s, 5 * s, 0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.fill();
+
+      const legSpread = Math.sin(beat) * 8 * s;
+      ctx.strokeStyle = p.color.pants;
+      ctx.lineWidth = 5 * s;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(-4 * s, 8 * s);
+      ctx.lineTo(-8 * s - legSpread, 26 * s);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(4 * s, 8 * s);
+      ctx.lineTo(8 * s + legSpread, 26 * s);
+      ctx.stroke();
+
+      ctx.fillStyle = p.color.body;
+      ctx.beginPath();
+      ctx.roundRect(-10 * s, -18 * s, 20 * s, 28 * s, 6 * s);
+      ctx.fill();
+
+      ctx.strokeStyle = p.color.body;
+      ctx.lineWidth = 4.5 * s;
+      ctx.beginPath();
+      ctx.moveTo(-10 * s, -8 * s);
+      ctx.quadraticCurveTo(-22 * s, -4 * s + armSwing * 10 * s, -18 * s, 10 * s);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(10 * s, -8 * s);
+      ctx.quadraticCurveTo(22 * s, -4 * s - armSwing * 10 * s, 18 * s, 10 * s);
+      ctx.stroke();
+
+      ctx.fillStyle = '#fceadd';
+      ctx.beginPath();
+      ctx.arc(0, -28 * s, 11 * s, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#333';
+      ctx.beginPath();
+      ctx.arc(-4 * s, -30 * s, 1.8 * s, 0, Math.PI * 2);
+      ctx.arc(4 * s, -30 * s, 1.8 * s, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(0, -26 * s, 4 * s, 0.15, Math.PI - 0.15);
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 1.5 * s;
+      ctx.stroke();
+
+      ctx.fillStyle = p.color.accent;
+      ctx.fillRect(-10 * s, -2 * s, 20 * s, 4 * s);
+
+      ctx.scale(p.facing, 1);
+      ctx.font = `bold ${Math.max(11, 13 * s)}px system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+      ctx.strokeText(p.username, 0, -42 * s);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(p.username, 0, -42 * s);
+
+      ctx.restore();
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (players.size > 0) {
+        const first = players.values().next().value;
+        const cx = canvas.width / 2;
+        const cy = canvas.height / 2;
+        const r = Math.hypot(first.targetX - cx, first.targetY - cy);
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      for (const p of players.values()) {
+        drawCharacter(p, animationTime);
+      }
+    }
+
+    function loop(now) {
+      const dt = Math.min(0.05, (now - lastFrame) / 1000);
+      lastFrame = now;
+      update(dt);
+      render();
+      requestAnimationFrame(loop);
+    }
+
+    let sharedWs = null;
+    let reconnectTimer = null;
+    let reconnectAttempts = 0;
+
+    function syncFromServer(list) {
+      if (!Array.isArray(list)) return;
+      const next = new Map();
+      for (const data of list) {
+        if (!data || !data.username) continue;
+        const key = data.username.toLowerCase();
+        const existing = players.get(key);
+        if (existing) {
+          existing.color = data.color || existing.color;
+          existing.joinTime = data.joinTime || existing.joinTime;
+          existing.angleOffset = typeof data.angleOffset === 'number' ? data.angleOffset : existing.angleOffset;
+          next.set(key, existing);
+        } else {
+          next.set(key, new Player(data));
+        }
+      }
+      players = next;
+      layoutCircle();
+      if (CHANNEL && players.size > 0) {
+        hintEl.style.display = 'none';
+      }
+    }
+
+    function connectShared() {
+      if (!CHANNEL) return;
+      if (sharedWs && (sharedWs.readyState === WebSocket.OPEN || sharedWs.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+      const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+      const url = proto + location.host;
+      try {
+        sharedWs = new WebSocket(url);
+      } catch (e) {
+        scheduleReconnect();
+        return;
+      }
+
+      sharedWs.onopen = () => {
+        reconnectAttempts = 0;
+        sharedWs.send(JSON.stringify({
+          type: 'subscribe',
+          channel: CHANNEL
+        }));
+        console.log('[overlay] subscribed to channel:', CHANNEL);
+      };
+
+      sharedWs.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'players') {
+            if (!msg.channel || msg.channel === CHANNEL) {
+              syncFromServer(msg.players);
+            }
+          }
+        } catch (_) {}
+      };
+
+      sharedWs.onclose = () => {
+        sharedWs = null;
+        scheduleReconnect();
+      };
+
+      sharedWs.onerror = () => {};
+    }
+
+    function scheduleReconnect() {
+      if (!CHANNEL) return;
+      reconnectAttempts++;
+      const wait = Math.min(2000 + reconnectAttempts * 800, 12000);
+      clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(connectShared, wait);
+    }
+
+    window.addEventListener('resize', resize);
+    resize();
+    requestAnimationFrame(loop);
+    if (CHANNEL) {
+      connectShared();
+    }
+  </script>
+</body>
+</html>
